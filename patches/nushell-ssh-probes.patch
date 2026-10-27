@@ -1,0 +1,88 @@
+diff --git a/src/remote/attach.rs b/src/remote/attach.rs
+index 033331e..bb98dc3 100644
+--- a/src/remote/attach.rs
++++ b/src/remote/attach.rs
+@@ -555,6 +555,10 @@ fn posix_remote_output_command(command: &str) -> String {
+     format!("printf '\n%s\n' '{REMOTE_OUTPUT_READY_MARKER}'\n{command}")
+ }
+ 
++fn posix_login_shell_command(command: &str) -> String {
++    format!("/bin/sh -lc {}", shell_quote(&posix_remote_output_command(command)))
++}
++
+ fn posix_base64_command(script: &str) -> String {
+     // OpenSSH for Windows hands the SSH command argument to the login shell
+     // wrapped in double quotes, which expands `$`, backticks, and `"` inside the
+@@ -1083,7 +1087,7 @@ impl RemoteSsh {
+     }
+ 
+     fn posix_user_shell_output(&self, remote_command: &str) -> io::Result<Output> {
+-        self.framed_user_shell_output(&posix_remote_output_command(remote_command))
++        self.framed_user_shell_output(&posix_login_shell_command(remote_command))
+     }
+ 
+     fn shell_output(&self, platform: &RemotePlatform, remote_command: &str) -> io::Result<Output> {
+@@ -1722,11 +1726,10 @@ pub(super) fn discover_remote_api_metadata(
+ 
+ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform> {
+     // Interactive setup forwards SSH stderr to the terminal, so a Windows host
+-    // whose default shell is PowerShell would print a raw
+-    // `CommandNotFoundException` for the POSIX `/bin/sh` probe below. Probe for
+-    // Windows first there so such hosts never receive a `/bin/sh` command.
+-    // Background bridges capture stderr instead, so they keep the POSIX-first
+-    // probe to avoid an extra round trip on Unix hosts.
++    // whose default shell is PowerShell would print a raw command-not-found
++    // diagnostic for the POSIX /bin/sh probe below. Probe for Windows first
++    // there so such hosts never receive a /bin/sh command. Background bridges
++    // capture stderr instead and keep the POSIX-first probe.
+     if !ssh.noninteractive {
+         if let Some(platform) = detect_windows_remote_platform(ssh, true)? {
+             return Ok(platform);
+@@ -1776,9 +1779,8 @@ fn detect_windows_remote_platform(
+     ssh: &RemoteSsh,
+     native_shell_only: bool,
+ ) -> io::Result<Option<DetectedRemotePlatform>> {
+-    // Capture a Unix login shell's expected "command not found" in stdout;
+-    // an ordinary failed probe is discarded without printing that diagnostic.
+-    let command = format!("{} 2>&1", windows_platform_probe_command(native_shell_only));
++    // SSH captures stderr; failed probes are discarded without shell redirection.
++    let command = windows_platform_probe_command(native_shell_only);
+     // Propagate cancellation, spawn failures, and SSH transport failures (exit
+     // 255) rather than retrying them against the POSIX probe, which would repeat
+     // an authentication failure. An ordinary command failure means "not Windows".
+@@ -4825,6 +4827,11 @@ mod tests {
+         assert!(RemotePlatform::from_uname("FreeBSD", "x86_64").is_none());
+     }
+ 
++    #[test]
++    fn windows_platform_probe_avoids_login_shell_redirection_syntax() {
++        assert!(!windows_platform_probe_command(true).contains("2>&1"));
++    }
++
+     #[test]
+     fn windows_platform_probe_preserves_native_and_unsupported_architectures() {
+         for arch in ["AMD64", "x86_64"] {
+@@ -5194,7 +5201,7 @@ mod tests {
+     fn windows_platform_probe_distinguishes_native_and_posix_login_shells() {
+         use std::os::windows::process::CommandExt;
+ 
+-        let probe = format!("{} 2>&1", windows_platform_probe_command(true));
++        let probe = windows_platform_probe_command(true);
+         let mut powershell = Command::new("powershell.exe");
+         powershell.args([
+             "-NoLogo",
+@@ -5481,6 +5488,14 @@ function Get-Process {
+         );
+     }
+ 
++    #[test]
++    fn posix_user_shell_commands_are_parsed_by_a_posix_login_shell() {
++        let command = posix_login_shell_command("command -v herdr");
++        assert!(command.starts_with("/bin/sh -lc '"), "{command}");
++        assert!(command.contains("command -v herdr"), "{command}");
++        assert!(command.contains(REMOTE_OUTPUT_READY_MARKER), "{command}");
++    }
++
+     #[test]
+     fn remote_api_bridge_always_selects_the_saved_session() {
+         let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
