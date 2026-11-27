@@ -1,0 +1,9 @@
+{
+  "kind": "git-head",
+  "upstream": "https://github.com/herdrdev/herdr.git",
+  "version_file": "flake.nix",
+  "version_grep": "pinnedRev = \"[0-9a-f]{40}\"",
+  "pinned_paths": ["patches"],
+  "pinned_flake_regex": "herdrdev/herdr|pinnedRev",
+  "sync_script": "bash scripts/sync-from-git-head.sh"
+}
